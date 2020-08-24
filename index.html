@@ -1,0 +1,40 @@
+<html>
+    <head>
+        <title></title>
+    </head>
+    <body>
+        <button>Get Videos</button>
+        <br>
+        <div class="content">
+            
+        </div>
+        <script>
+            let btn = document.querySelector("button");
+            let content = document.querySelector(".content");
+
+            btn.addEventListener("click", () => {
+                fetch("/", {
+                    method: 'POST'
+                })
+                .then(res => {
+                    let interval = setInterval((interval) => {
+                        checkStatus(interval);
+                    }, 5000);
+                })
+                
+            })
+
+            async function checkStatus(interval) {
+                let response = await fetch("/status");
+                let data = await response.json();
+                if (data.length === 0) return;
+                for (let src of data) {
+                    let div = document.createElement("div");
+                    content.appendChild(div);
+                    div.innerHTML = `<video src=${src} width='500' height='auto'></video>`;
+                }
+                clearInterval(interval);
+            }
+        </script>
+    </body>
+</html>
