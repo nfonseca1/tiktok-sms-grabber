@@ -17,6 +17,7 @@
                     method: 'POST'
                 })
                 .then(res => {
+                    window.postIndex = 0;
                     let interval = setInterval((interval) => {
                         checkStatus(interval);
                     }, 5000);
@@ -27,13 +28,19 @@
             async function checkStatus(interval) {
                 let response = await fetch("/status");
                 let data = await response.json();
-                if (data.length === 0) return;
-                for (let src of data) {
+                if (data.posts.length === 0) return;
+                for (let i = window.postIndex; i < data.posts.length; i++) {
                     let div = document.createElement("div");
-                    content.appendChild(div);
-                    div.innerHTML = `<video src=${src} width='500' height='auto'></video>`;
+                    div.innerHTML = data.posts[i].html;
+                    let script = document.createElement("script");
+                    let src = document.createAttribute("src");
+                    src.value = "https://www.tiktok.com/embed.js";
+                    script.setAttributeNode(src);
+                    div.appendChild(script);
+                    document.querySelector("body").appendChild(div);
                 }
-                clearInterval(interval);
+                window.postIndex = data.posts.length;
+                if (data.completed) clearInterval(interval);
             }
         </script>
     </body>

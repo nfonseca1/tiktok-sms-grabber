@@ -4,31 +4,38 @@ const app = express();
 const session = require("express-session");
 
 app.set("views", __dirname);
+app.engine("html", require("ejs").__express);
 app.use(express.json());
 app.use(express.urlencoded());
-app.use(express.static(__dirname));
+//.app.use(express.static(__dirname));
 app.use(session({secret: "Shh, its a secret!"}));
 
 app.get("/", (req, res) => {
-	res.sendFile("./index.html");
-	req.session.vidSources = [];
-	req.session.save();
+	req.session.content = {};
+	req.session.content.posts = [];
+	req.session.content.completed = false;
+	req.session.save(() => {
+		res.render("index.html");
+	});
 })
 
-app.post("/", async (req, res) => {
+app.post("/", (req, res) => {
 	res.sendStatus(200);
-	req.session.vidSources = await scrape(req);
-	req.session.save();
+	req.session.reload(async () => {
+		await scrape(req);
+		req.session.content.completed = true;
+		req.session.save();
+	})
 })
 
 app.get("/status", (req, res) => {
 	req.session.reload(() => {
-		res.send(req.session.vidSources);
+		res.send(req.session.content);
 	})
 })
 
 let scrape = async (req) => {
-	const browser = await puppeteer.launch({headless: false, defaultViewport: {width: 1920, height: 1080}});
+	const browser = await puppeteer.launch({headless: false, defaultViewport: {width: 4000, height: 1080}});
 	const page = await browser.newPage();
 	console.log(await page.browser().version());
 	await page.goto("https://messages.google.com");
@@ -85,47 +92,30 @@ let scrape = async (req) => {
 		})
 	})
 	//console.log(links);	
-	let videoSources = [];
+	// let posts = [];
 	for (let link of links) {
 		await page.goto(link, {waitUntil: "networkidle2"});
-		let urls = await page.evaluate(async () => {
+		let embedPost = await page.evaluate(async () => {
 			return await new Promise(async (resolve, reject) => {
 				let url = window.location.href;
 				let targetURL = url.split("?")[0];
-				let userURL = targetURL.split("/video")[0];
-				resolve({target: targetURL, user: userURL})
+				let urlParts = targetURL.split("/video/");
+				let userURL = urlParts[0];
+				let user = userURL.split("tiktok.com/")[1];
+				let id = urlParts[1];
+				let embedHTML = `<blockquote class="tiktok-embed" cite="${targetURL}" 
+					data-video-id="${id}" style="max-width: 605px;min-width: 325px;" > <section> <a target="_blank" 
+					title="${user}" href="${userURL}"></a> </section> </blockquote>`;
+				resolve({html: embedHTML, url: targetURL});
 			})
 		})
-
-		await page.goto(urls.user, {waitUntil: "networkidle2"});
-		await page.waitForSelector(".video-feed-item");
-		let vidSrc = await page.evaluate(async (target) => {
-			return await new Promise(async (resolve, reject) => {
-				let foundTarget = false;
-				do {
-					window.scrollTo(0, 1000000000);
-					await new Promise((res, rej) => {
-						setTimeout(() => res(), 100);
-					})
-					let aTags = document.querySelectorAll(".share-layout-main a");
-					for (let a of aTags) {
-						if (a.href == target) {
-							foundTarget = true;
-							a.click();
-							await setTimeout(() => {
-								resolve(document.querySelector("video").src);
-							}, 100)
-						}
-					}
-				}
-				while(foundTarget === false);
-			})
-		}, urls.target)
-		
-		videoSources.push(vidSrc);
+		req.session.reload(() => {
+			req.session.content.posts.push(embedPost);
+			req.session.save();
+		})
 	}	
 	browser.close();
-	return videoSources;
+	return;
 }
 
 app.listen(3000, () => {
