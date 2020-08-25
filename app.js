@@ -98,6 +98,12 @@ app.get("/home", (req, res) => {
 
 app.post("/home", (req, res) => {
 	req.session.reload(async () => {
+		let postsFound = await findPosts(req);
+		if (postsFound) {
+			res.send({authenticate: false});
+			return;
+		}
+
 		browser = await puppeteer.launch({headless: false, defaultViewport: {width: 1920, height: 1080}});
 		page = await browser.newPage();
 		console.log(await page.browser().version());
@@ -114,9 +120,48 @@ app.post("/home", (req, res) => {
 		}
 		await scrape(req, req.body.contact);
 		req.session.content.completed = true;
-		req.session.save();
+		req.session.save(() => {
+			MongoClient.connect(url, (err, client) => {
+				if (err) throw err;
+				let db = client.db("tiktok-sms-grabber");
+				let arr = [];
+				for (let post of req.session.content.posts) {
+					let obj = {
+						post: post,
+						user: req.session.user
+					}
+					arr.push(obj);
+				}
+				db.collection("Posts").insertMany(arr, (err, result) => {
+					if (err) throw err;
+					client.close();
+				})
+			})
+		})
 	})
 })
+
+async function findPosts(req) {
+	return await new Promise((resolve) => {
+		MongoClient.connect(url, (err, client) => {
+			if (err) throw err;
+			let db = client.db("tiktok-sms-grabber");
+			db.collection("Posts").find({user: req.session.user}).toArray((err, results) => {
+				if (err) throw err;
+				client.close();
+				if (results) {
+					for (let result of results) {
+						req.session.content.posts.push(result.post);
+					}
+					req.session.save(() => {
+						resolve(true);
+					})
+				}
+				else resolve(false);
+			})
+		})
+	})
+}
 
 app.get("/status", (req, res) => {
 	req.session.reload(() => {
@@ -183,6 +228,7 @@ let setData = async (req) => {
 
 let scrape = async (req, contact) => {
 	//await req.session.reload();
+	await page.waitForSelector("mws-conversation-list-item");
 
 	await page.evaluate((contact) => {
 		let conversations = document.querySelectorAll("mws-conversation-list-item a span");
