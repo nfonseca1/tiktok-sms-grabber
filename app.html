@@ -10,18 +10,25 @@
         </style>
     </head>
     <body>
+        <input type="text" placeholder="Contact to search">
         <button>Get Videos</button>
         <br>
         <div class="content">
             
         </div>
         <script>
+            let input = document.querySelector("input");
             let btn = document.querySelector("button");
             let content = document.querySelector(".content");
 
             btn.addEventListener("click", async () => {
+                if (input.value === "") return;
                 fetch("/", {
-                    method: "POST"
+                    method: "POST",
+                    headers: {
+                        'Content-type': 'application/json'
+                    },
+                    body: JSON.stringify({contact: input.value})
                 })
                 .then(res => {
                     return res.json();

@@ -39,7 +39,7 @@ app.post("/", (req, res) => {
 			res.send({authenticate: false});
 			await setData(req);
 		}
-		await scrape(req);
+		await scrape(req, req.body.contact);
 		req.session.content.completed = true;
 		req.session.save();
 	})
@@ -108,10 +108,16 @@ let setData = async (req) => {
 	}, req.session.localData.cookies)
 }
 
-let scrape = async (req) => {
+let scrape = async (req, contact) => {
 	//await req.session.reload();
 
-	await page.goto("https://messages.google.com/web/conversations/2", {waitUntil: "networkidle2"});
+	await page.evaluate((contact) => {
+		let conversations = document.querySelectorAll("mws-conversation-list-item a span");
+		for (let span of conversations) {
+			if (span.textContent.toLowerCase() === contact.toLowerCase()) span.click();
+		}
+	}, contact)
+	
 	await page.waitForSelector("mws-message-wrapper");
 
 	let links = await page.evaluate(async () => {
