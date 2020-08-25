@@ -7,21 +7,38 @@ app.set("views", __dirname);
 app.engine("html", require("ejs").__express);
 app.use(express.json());
 app.use(express.urlencoded());
-//.app.use(express.static(__dirname));
+app.use(express.static(__dirname));
 app.use(session({secret: "Shh, its a secret!"}));
 
+let browser;
+let page;
+
 app.get("/", (req, res) => {
+	req.session.localData = {};
 	req.session.content = {};
 	req.session.content.posts = [];
 	req.session.content.completed = false;
 	req.session.save(() => {
-		res.render("index.html");
+		res.render("app.html");
 	});
 })
 
 app.post("/", (req, res) => {
-	res.sendStatus(200);
 	req.session.reload(async () => {
+		browser = await puppeteer.launch({headless: false, defaultViewport: {width: 1920, height: 1080}});
+		page = await browser.newPage();
+		console.log(await page.browser().version());
+		await page.goto("https://messages.google.com/web/authentication", {waitUntil: "networkidle2"});
+		
+		if (Object.keys(req.session.localData).length === 0) {
+			await authenticate();
+			res.send({authenticate: true});
+			await getData(req);
+		}
+		else {
+			res.send({authenticate: false});
+			await setData(req);
+		}
 		await scrape(req);
 		req.session.content.completed = true;
 		req.session.save();
@@ -34,36 +51,65 @@ app.get("/status", (req, res) => {
 	})
 })
 
-let scrape = async (req) => {
-	const browser = await puppeteer.launch({headless: false, defaultViewport: {width: 4000, height: 1080}});
-	const page = await browser.newPage();
-	console.log(await page.browser().version());
-	await page.goto("https://messages.google.com");
-
+let authenticate = async() => {
+	await page.screenshot({path: "./qr.png", clip: {x: 1075, y: 415, width: 250, height: 250}});
 	await page.evaluate(() => {
-		localStorage.setItem("dark_mode_enabled", "true");
-		localStorage.setItem("pr_mw_exclusive_tab_key", "7a33c84e-4f08-86ad-ee64-f6d896986976");
-		localStorage.setItem("pr_backend_type", "1");
-		localStorage.setItem("pr_crypto_msg_enc_key", "GcYH6OtCHSCKVRI4OAou8r79yl8WV14XsMP9hRY3v20=");
-		localStorage.setItem("pr_tachyon_auth_token", "ANcy13Fi/OhZKMJQFa6ih7bwD9PDGbo93wzAoAYcGC3Vxnm7pZN3CzCNhA4MQwiRxSlkpBp9AzHPhClS5Mas5qrnPPDniMEi2TpvgCckC9xNPIte2URa9ZldN1JF7hCFIHhHnCQSY6TmOC6b0SOcDw==");
-		localStorage.setItem("pr_auth_sources", "B");
-		localStorage.setItem("pr_crypto_msg_hmac", "jwu6io1nrBdCAWcoLxv1eY3y4xhgnPDmzO1ruOgm78U=");
-		localStorage.setItem("pr_tachyon_auth_dest_id", "CA0SHCsxLVhuRXhkZnJwcGtPek1WaUVZYVVNVTliNTYaBUJ1Z2xl");
-		localStorage.setItem("pr_tachyon_auth_desktop_id", "CA8SGSsxLWN4Z0h0a1pVWjNvTlFsQndQeGFneTkaBUJ1Z2xl");
-		localStorage.setItem("pr_storage_state", "true");
-		localStorage.setItem("pr_crypto_priv_key", "zb0rC2I8213iAPz10vPXm2T5FBfvqZ54uMWy7HYcJAo=");
-		localStorage.setItem("pr_crypto_hmac", "La3/zUEEhZ4zZllFpz/kIrb3lHERrNab1JC8h7YfJfs=");
-		localStorage.setItem("pr_crypto_pub_key", "BM7Sm1vKlCrhwbnPNBZ8/huG3/02ztOt/CAdDnuJ5zfSvkmKXK2XhGL+PEC98WCCNdEugJ++CI1Jlkk+5S8I53I=");
+		document.querySelector(".mat-slide-toggle-bar").click();
+	})
+	return;
+}
 
-		sessionStorage.setItem("persist_history", "[true]");
-		sessionStorage.setItem("latest_ditto_id", "+1-cxgHtkZUZ3oNQIBwPxagy9");
+let getData = async (req) => {
+	await page.waitForSelector("mw-main-container");
 
-		let cookies = "_ga=GA1.3.1701660504.1598132763; pair_state_cookie=true; SID=0gdnNtnqhZZCMRiEFg_ktiScoFXisfPHSyEyNATejOxUTH-K_eLs_molmhiS0ZV_T0x5Zw.; APISID=kZ_4wqQ9tSGCFndc/A1LUQyrEydoZhe4jM; SAPISID=4PEr6cdpUJfHfY7h/AmQoq2feFqQ9egm5A; __Secure-3PAPISID=4PEr6cdpUJfHfY7h/AmQoq2feFqQ9egm5A; _gid=GA1.3.2134402985.1598227944; 1P_JAR=2020-08-24-00; SEARCH_SAMESITE=CgQIwpAB; SIDCC=AJi4QfFjE9gJ7QOzAxpvA81bU1RzPWGwrV614WDZgf0Dq4KSof-1psjVHQBE3-vXv_F_HKf_Ig";
+	let dataObj = await page.evaluate(async () => {
+		return await new Promise((res) => {
+			let obj = {
+				cookies: document.cookie,
+				localStorage: JSON.stringify(window.localStorage),
+				sessionStorage: JSON.stringify(window.sessionStorage)
+			};
+			res(obj);
+		})
+	})
+	dataObj.localStorage = JSON.parse(dataObj.localStorage);
+	dataObj.sessionStorage = JSON.parse(dataObj.sessionStorage);
+	req.session.localData = dataObj;
+	req.session.save();
+}
+
+let setData = async (req) => {
+	await page.evaluate((local) => {
+		localStorage.setItem("dark_mode_enabled", local.dark_mode_enabled);
+		localStorage.setItem("pr_mw_exclusive_tab_key", local.pr_mw_exclusive_tab_key);
+		localStorage.setItem("pr_backend_type", local.pr_backend_type);
+		localStorage.setItem("pr_crypto_msg_enc_key", local.pr_crypto_msg_enc_key);
+		localStorage.setItem("pr_tachyon_auth_token", local.pr_tachyon_auth_token);
+		localStorage.setItem("pr_auth_sources", local.pr_auth_sources);
+		localStorage.setItem("pr_crypto_msg_hmac", local.pr_crypto_msg_hmac);
+		localStorage.setItem("pr_tachyon_auth_dest_id", local.pr_tachyon_auth_dest_id);
+		localStorage.setItem("pr_tachyon_auth_desktop_id", local.pr_tachyon_auth_desktop_id);
+		localStorage.setItem("pr_storage_state", local.pr_storage_state);
+		localStorage.setItem("pr_crypto_priv_key", local.pr_crypto_priv_key);
+		localStorage.setItem("pr_crypto_hmac", local.pr_crypto_hmac);
+		localStorage.setItem("pr_crypto_pub_key", local.pr_crypto_pub_key);
+	}, req.session.localData.localStorage)
+
+	await page.evaluate((session) => {
+		sessionStorage.setItem("persist_history", session.persist_history);
+		sessionStorage.setItem("latest_ditto_id", session.latest_ditto_id);
+	}, req.session.localData.sessionStorage)
+
+	await page.evaluate((cookies) => {
 		let cookiesArr = cookies.split("; ");
 		cookiesArr.forEach((c) => {
 			document.cookie = c;
 		})
-	})
+	}, req.session.localData.cookies)
+}
+
+let scrape = async (req) => {
+	//await req.session.reload();
 
 	await page.goto("https://messages.google.com/web/conversations/2", {waitUntil: "networkidle2"});
 	await page.waitForSelector("mws-message-wrapper");

@@ -1,6 +1,13 @@
+<!DOCTYPE html>
 <html>
     <head>
         <title></title>
+        <style>
+            body {
+                background-color: #202020;
+                color: #d0d0d0;
+            }
+        </style>
     </head>
     <body>
         <button>Get Videos</button>
@@ -12,17 +19,23 @@
             let btn = document.querySelector("button");
             let content = document.querySelector(".content");
 
-            btn.addEventListener("click", () => {
+            btn.addEventListener("click", async () => {
                 fetch("/", {
-                    method: 'POST'
+                    method: "POST"
                 })
                 .then(res => {
+                    return res.json();
+                })
+                .then(data => {
+                    if (data.authenticate) {
+                        content.innerHTML = "<img src='/qr.png'>";
+                    }
+
                     window.postIndex = 0;
                     let interval = setInterval((interval) => {
                         checkStatus(interval);
                     }, 5000);
                 })
-                
             })
 
             async function checkStatus(interval) {
