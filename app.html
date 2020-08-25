@@ -23,12 +23,12 @@
 
             btn.addEventListener("click", async () => {
                 if (input.value === "") return;
-                fetch("/", {
+                fetch("/home", {
                     method: "POST",
                     headers: {
                         'Content-type': 'application/json'
                     },
-                    body: JSON.stringify({contact: input.value})
+                    body: JSON.stringify({contact: input.value}),
                 })
                 .then(res => {
                     return res.json();

@@ -2,6 +2,13 @@ const puppeteer = require("puppeteer");
 const express = require("express");
 const app = express();
 const session = require("express-session");
+const MongoClient = require("mongodb").MongoClient;
+const bcrypt = require("bcrypt");
+const saltRounds = 10;
+
+require("dotenv").config();
+
+let url = process.env.DB_HOST;
 
 app.set("views", __dirname);
 app.engine("html", require("ejs").__express);
@@ -14,6 +21,44 @@ let browser;
 let page;
 
 app.get("/", (req, res) => {
+	res.render("login.html");
+})
+
+app.post("/register", async (req, res) => {
+	let username = req.body.username;
+	let password = req.body.password;
+	let hashedPass = await new Promise((resolve) => {
+		bcrypt.hash(password, saltRounds, (err, hash) => {
+			if (err) throw err;
+			resolve(hash);
+		});
+	})
+
+	await new Promise((resolve) => {
+		MongoClient.connect(url, (err, client) => {
+			if (err) throw err;
+			let db = client.db("tiktok-sms-grabber");
+
+			let newUser = {
+				username: username,
+				password: hashedPass
+			}
+
+			db.collection("Users").insertOne(newUser, (err, result) => {
+				if (err) throw err;
+				req.session.user = newUser._id.toString();
+				req.session.save();
+				console.log(newUser._id.toString());
+
+				client.close();
+				resolve();
+			})
+		})
+	})	
+	res.redirect("/home");
+})
+
+app.get("/home", (req, res) => {
 	req.session.localData = {};
 	req.session.content = {};
 	req.session.content.posts = [];
@@ -23,7 +68,7 @@ app.get("/", (req, res) => {
 	});
 })
 
-app.post("/", (req, res) => {
+app.post("/home", (req, res) => {
 	req.session.reload(async () => {
 		browser = await puppeteer.launch({headless: false, defaultViewport: {width: 1920, height: 1080}});
 		page = await browser.newPage();
@@ -117,7 +162,7 @@ let scrape = async (req, contact) => {
 			if (span.textContent.toLowerCase() === contact.toLowerCase()) span.click();
 		}
 	}, contact)
-	
+
 	await page.waitForSelector("mws-message-wrapper");
 
 	let links = await page.evaluate(async () => {
