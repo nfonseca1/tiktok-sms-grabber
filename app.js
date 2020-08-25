@@ -21,7 +21,35 @@ let browser;
 let page;
 
 app.get("/", (req, res) => {
-	res.render("login.html");
+	if (req.session.user) res.redirect("/home");
+	else res.render("login.html");
+})
+
+app.post("/", async (req, res) => {
+	let username = req.body.username;
+	let password = req.body.password;
+
+	MongoClient.connect(url, (err, client) => {
+		if (err) throw err;
+		let db = client.db("tiktok-sms-grabber");
+
+		db.collection("Users").findOne({username: username}, async (err, result) => {
+			if (err) throw err;
+			if (result == null) {
+				client.close();
+				res.redirect("/");
+				return;
+			}
+
+			let match = await bcrypt.compare(password, result.password);
+			client.close();
+			if (match) {
+				req.session.user = result._id.toString();
+				req.session.save();
+				res.redirect("/home");
+			}
+		})
+	})
 })
 
 app.post("/register", async (req, res) => {
