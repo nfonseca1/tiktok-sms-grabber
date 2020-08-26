@@ -89,7 +89,7 @@ app.post("/register", async (req, res) => {
 app.get("/home", (req, res) => {
 	req.session.localData = {};
 	req.session.content = {};
-	req.session.content.posts = [];
+	req.session.content.posts = {};
 	req.session.content.completed = false;
 	req.session.save(() => {
 		res.render("app.html");
@@ -98,7 +98,10 @@ app.get("/home", (req, res) => {
 
 app.post("/home", (req, res) => {
 	req.session.reload(async () => {
-		let postsFound = await findPosts(req);
+		req.session.content.lastContact = req.body.contact;
+		req.session.content.posts[req.body.contact] = [];
+		req.session.save();
+		let postsFound = await findPosts(req, req.body.contact);
 		if (postsFound) {
 			res.send({authenticate: false});
 			return;
@@ -125,10 +128,11 @@ app.post("/home", (req, res) => {
 				if (err) throw err;
 				let db = client.db("tiktok-sms-grabber");
 				let arr = [];
-				for (let post of req.session.content.posts) {
+				for (let post of req.session.content.posts[req.body.contact]) {
 					let obj = {
 						post: post,
-						user: req.session.user
+						user: req.session.user,
+						contact: req.body.contact
 					}
 					arr.push(obj);
 				}
@@ -141,17 +145,17 @@ app.post("/home", (req, res) => {
 	})
 })
 
-async function findPosts(req) {
+async function findPosts(req, contact) {
 	return await new Promise((resolve) => {
 		MongoClient.connect(url, (err, client) => {
 			if (err) throw err;
 			let db = client.db("tiktok-sms-grabber");
-			db.collection("Posts").find({user: req.session.user}).toArray((err, results) => {
+			db.collection("Posts").find({user: req.session.user, contact: contact}).toArray((err, results) => {
 				if (err) throw err;
 				client.close();
-				if (results) {
+				if (results?.length > 0) {
 					for (let result of results) {
-						req.session.content.posts.push(result.post);
+						req.session.content.posts[contact].push(result.post);
 					}
 					req.session.save(() => {
 						resolve(true);
@@ -165,7 +169,11 @@ async function findPosts(req) {
 
 app.get("/status", (req, res) => {
 	req.session.reload(() => {
-		res.send(req.session.content);
+		let obj = {
+			posts: req.session.content.posts[req.session.content.lastContact],
+			completed: req.session.content.completed
+		}
+		res.send(obj);
 	})
 })
 
@@ -237,6 +245,8 @@ let scrape = async (req, contact) => {
 		}
 	}, contact)
 
+	req.session.content.posts[contact] = [];
+	req.session.save();
 	await page.waitForSelector("mws-message-wrapper");
 
 	let links = await page.evaluate(async () => {
@@ -281,7 +291,7 @@ let scrape = async (req, contact) => {
 			})
 		})
 		req.session.reload(() => {
-			req.session.content.posts.push(embedPost);
+			req.session.content.posts[contact].push(embedPost);
 			req.session.save();
 		})
 	}	
