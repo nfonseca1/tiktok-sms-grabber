@@ -86,18 +86,21 @@ app.post("/register", async (req, res) => {
 	res.redirect("/home");
 })
 
-app.get("/home", (req, res) => {
+app.get("/home", async (req, res) => {
 	req.session.localData = {};
 	req.session.content = {};
 	req.session.content.posts = {};
+	req.session.content.posts.default = [];
 	req.session.content.completed = false;
-	req.session.save(() => {
+	req.session.save(async () => {
+		await findPosts(req);
 		res.render("app.html");
 	});
 })
 
 app.post("/home", (req, res) => {
 	req.session.reload(async () => {
+		if (req.body.username) await setContactUser(req, req.body.username);
 		req.session.content.lastContact = req.body.contact;
 		req.session.content.posts[req.body.contact] = [];
 		req.session.save();
@@ -131,9 +134,10 @@ app.post("/home", (req, res) => {
 				for (let post of req.session.content.posts[req.body.contact]) {
 					let obj = {
 						post: post,
-						user: req.session.user,
-						contact: req.body.contact
+						users: [req.session.user],
+						contacts: [req.body.contact]
 					}
+					if (req.session.contactUser) obj.users.push(req.session.contactUser);
 					arr.push(obj);
 				}
 				db.collection("Posts").insertMany(arr, (err, result) => {
@@ -145,17 +149,44 @@ app.post("/home", (req, res) => {
 	})
 })
 
+async function setContactUser(req, user) {
+	return await new Promise((resolve) => {
+		MongoClient.connect(url, (err, client) => {
+			if (err) throw err;
+			let db = client.db("tiktok-sms-grabber");
+			db.collection("Users").findOne({username: user}, (err, result) => {
+				if (err) throw err;
+				client.close();
+				if (result) {
+					req.session.contactUser = result._id.toString();
+					req.session.save(() => {
+						resolve(true);
+					})
+				} else {
+					resolve(false);
+				}
+			})
+		})
+	})
+}
+
 async function findPosts(req, contact) {
 	return await new Promise((resolve) => {
 		MongoClient.connect(url, (err, client) => {
 			if (err) throw err;
 			let db = client.db("tiktok-sms-grabber");
-			db.collection("Posts").find({user: req.session.user, contact: contact}).toArray((err, results) => {
+
+			let query = {
+				users: { $all: [req.session.user]}
+			}
+			if (contact) query.contacts = { $all: [contact]}
+			db.collection("Posts").find(query).toArray((err, results) => {
 				if (err) throw err;
 				client.close();
 				if (results?.length > 0) {
 					for (let result of results) {
-						req.session.content.posts[contact].push(result.post);
+						if (contact) req.session.content.posts[contact].push(result.post);
+						else req.session.content.posts.default.push(result.post);
 					}
 					req.session.save(() => {
 						resolve(true);
@@ -167,12 +198,13 @@ async function findPosts(req, contact) {
 	})
 }
 
-app.get("/status", (req, res) => {
+app.post("/status", (req, res) => {
 	req.session.reload(() => {
 		let obj = {
 			posts: req.session.content.posts[req.session.content.lastContact],
 			completed: req.session.content.completed
 		}
+		if (req.body.grabDefault) obj.posts = req.session.content.posts.default;
 		res.send(obj);
 	})
 })
