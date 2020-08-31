@@ -3,223 +3,280 @@ const express = require("express");
 const app = express();
 const session = require("express-session");
 const MongoClient = require("mongodb").MongoClient;
-const bcrypt = require("bcrypt");
-const saltRounds = 10;
+const bcrypt = require("bcrypt"); // Encryption
+const saltRounds = 10; // Required for encryption
 
-require("dotenv").config();
+require("dotenv").config(); // Environment variables
 
-let url = process.env.DB_HOST;
+let url = process.env.DB_HOST; // Database url
 
 app.set("views", __dirname);
 app.engine("html", require("ejs").__express);
 app.use(express.json());
 app.use(express.urlencoded());
-app.use(express.static(__dirname));
-app.use(session({secret: "Shh, its a secret!"}));
+app.use(express.static(__dirname)); // For static files such as css
+app.use(session({secret: "Shh, its a secret!"})); // For user session
 
-let browser;
-let page;
-
+// login page
 app.get("/", (req, res) => {
+    // If user has a session, redirect to home. Otherwise render login page
 	if (req.session.user) res.redirect("/home");
-	else res.render("login.html");
+	else res.render("login.ejs", {loginError: "", regError: ""});
 })
 
-app.post("/", async (req, res) => {
-	let username = req.body.username;
+// Handle login request
+app.post("/login", (req, res) => {
+    let username = req.body.username;
 	let password = req.body.password;
-
+    // Connect to mongodb
 	MongoClient.connect(url, (err, client) => {
 		if (err) throw err;
 		let db = client.db("tiktok-sms-grabber");
-
+        // Find user with submitted username
 		db.collection("Users").findOne({username: username}, async (err, result) => {
+            client.close();
 			if (err) throw err;
 			if (result == null) {
-				client.close();
-				res.redirect("/");
+				res.render("login.ejs", {loginError: "Username/password did not match", regError: ""});
 				return;
 			}
-
+            // Compare submitted password with encrypted db password
 			let match = await bcrypt.compare(password, result.password);
-			client.close();
 			if (match) {
-				req.session.user = result._id.toString();
-				req.session.save();
-				res.redirect("/home");
-			}
+                // Set user session properties if matched
+                req.session.user = {
+                    id: result._id.toString(),
+                    username: result.username,
+                    contacts: result.contacts
+                }
+                req.session.save();
+				res.redirect("/home"); // Go to home route
+            }
+            else {
+                res.render("login.ejs", {loginError: "Username/password did not match", regError: ""});
+                return;
+            }
 		})
 	})
 })
 
-app.post("/register", async (req, res) => {
-	let username = req.body.username;
-	let password = req.body.password;
-	let hashedPass = await new Promise((resolve) => {
-		bcrypt.hash(password, saltRounds, (err, hash) => {
-			if (err) throw err;
-			resolve(hash);
-		});
-	})
-
-	await new Promise((resolve) => {
-		MongoClient.connect(url, (err, client) => {
-			if (err) throw err;
-			let db = client.db("tiktok-sms-grabber");
-
-			let newUser = {
-				username: username,
-				password: hashedPass
-			}
-
-			db.collection("Users").insertOne(newUser, (err, result) => {
-				if (err) throw err;
-				req.session.user = newUser._id.toString();
-				req.session.save();
-				console.log(newUser._id.toString());
-
-				client.close();
-				resolve();
-			})
-		})
-	})	
-	res.redirect("/home");
+// Handle new user registration
+app.post("/register", (req, res) => {
+    let username = req.body.username;
+    let password = req.body.password;
+    // Connect to mongodb
+    MongoClient.connect(url, (err, client) => {
+        if (err) throw err;
+        let db = client.db("tiktok-sms-grabber");
+        // Find user with submitted username
+        db.collection("Users").findOne({username: username}, async (err, result) => {
+            if (err) throw err;
+            if (result) {
+                // If user exists, re-render login with registration error
+                client.close();
+                res.render("login.ejs", {loginError: "", regError: "Username already exists"});
+            }
+            else {
+                // Encrypt password to save to database
+                let hashedPass = await new Promise((resolve) => {
+                    bcrypt.hash(password, saltRounds, (err, hash) => {
+                        if (err) throw err;
+                        resolve(hash);
+                    });
+                })
+                // Set user to be added
+                let newUser = {
+                    username: username,
+                    password: hashedPass,
+                    contacts: []
+                }
+                // Insert new user to database
+                db.collection("Users").insertOne(newUser, (err) => {
+                    client.close();
+                    if (err) throw err;
+                    // Add new user to session
+                    req.session.user = {
+                        id: newUser._id.toString(),
+                        username: newUser.username,
+                        contacts: newUser.contacts
+                    }
+                    req.session.save();
+                    res.redirect("/home"); // Go to home route
+                })
+            }
+        })
+    })
 })
 
-app.get("/home", async (req, res) => {
-	req.session.localData = {};
-	req.session.content = {};
-	req.session.content.posts = {};
-	req.session.content.posts.default = [];
-	req.session.content.completed = false;
-	req.session.save(async () => {
-		await findPosts(req);
-		res.render("app.html");
-	});
+// Home page for user
+app.get("/home", (req, res) => {
+    if (!req.session.user) {
+        res.redirect("/");
+        return;
+    }
+    // Set up session data properties
+    req.session.localData = {};
+    req.session.content = {
+        finishedLoading: true,
+        contact: null,
+        posts: []
+    }
+    res.render("home.ejs", {contacts: req.session.user.contacts}); // Render home page
 })
 
-app.post("/home", (req, res) => {
-	req.session.reload(async () => {
-		if (req.body.username) await setContactUser(req, req.body.username);
-		req.session.content.lastContact = req.body.contact;
-		req.session.content.posts[req.body.contact] = [];
-		req.session.save();
-		let postsFound = await findPosts(req, req.body.contact);
-		if (postsFound) {
-			res.send({authenticate: false});
-			return;
-		}
+// Add new contact for user
+app.post("/contacts", (req, res) => {
+    let contact = req.body.contact;
+    let username = req.body.username;
 
-		browser = await puppeteer.launch({headless: false, defaultViewport: {width: 1920, height: 1080}});
-		page = await browser.newPage();
-		console.log(await page.browser().version());
-		await page.goto("https://messages.google.com/web/authentication", {waitUntil: "networkidle2"});
-		
-		if (Object.keys(req.session.localData).length === 0) {
-			await authenticate();
-			res.send({authenticate: true});
-			await getData(req);
-		}
-		else {
-			res.send({authenticate: false});
-			await setData(req);
-		}
-		await scrape(req, req.body.contact);
-		req.session.content.completed = true;
-		req.session.save(() => {
-			MongoClient.connect(url, (err, client) => {
-				if (err) throw err;
-				let db = client.db("tiktok-sms-grabber");
-				let arr = [];
-				for (let post of req.session.content.posts[req.body.contact]) {
-					let obj = {
-						post: post,
-						users: [req.session.user],
-						contacts: [req.body.contact]
-					}
-					if (req.session.contactUser) obj.users.push(req.session.contactUser);
-					arr.push(obj);
-				}
-				db.collection("Posts").insertMany(arr, (err, result) => {
-					if (err) throw err;
-					client.close();
-				})
-			})
-		})
-	})
+    // Connect to mongodb
+    MongoClient.connect(url, (err, client) => {
+        if (err) throw err;
+        let db = client.db("tiktok-sms-grabber");
+        // Set new contact to be added to db
+        let newContact = {
+            contactName: contact,
+            username: username
+        }
+        let currentUser = req.session.user.username;
+        db.collection("Users").updateOne({username: currentUser}, { $push: { contacts: newContact }}, (err, result) => {
+            if (err) throw err;
+            // Update user contacts in session data
+            req.session.user.contacts.push(newContact);
+            req.session.save(() => {
+                // Re-render home page with new contacts
+                res.send(newContact);
+            });
+        })
+    })
 })
 
-async function setContactUser(req, user) {
-	return await new Promise((resolve) => {
-		MongoClient.connect(url, (err, client) => {
-			if (err) throw err;
-			let db = client.db("tiktok-sms-grabber");
-			db.collection("Users").findOne({username: user}, (err, result) => {
-				if (err) throw err;
-				client.close();
-				if (result) {
-					req.session.contactUser = result._id.toString();
-					req.session.save(() => {
-						resolve(true);
-					})
-				} else {
-					resolve(false);
-				}
-			})
-		})
-	})
-}
-
-async function findPosts(req, contact) {
-	return await new Promise((resolve) => {
-		MongoClient.connect(url, (err, client) => {
-			if (err) throw err;
-			let db = client.db("tiktok-sms-grabber");
-
-			let query = {
-				users: { $all: [req.session.user]}
-			}
-			if (contact) query.contacts = { $all: [contact]}
-			db.collection("Posts").find(query).toArray((err, results) => {
-				if (err) throw err;
-				client.close();
-				if (results?.length > 0) {
-					for (let result of results) {
-						if (contact) req.session.content.posts[contact].push(result.post);
-						else req.session.content.posts.default.push(result.post);
-					}
-					req.session.save(() => {
-						resolve(true);
-					})
-				}
-				else resolve(false);
-			})
-		})
-	})
-}
-
-app.post("/status", (req, res) => {
-	req.session.reload(() => {
-		let obj = {
-			posts: req.session.content.posts[req.session.content.lastContact],
-			completed: req.session.content.completed
-		}
-		if (req.body.grabDefault) obj.posts = req.session.content.posts.default;
-		res.send(obj);
-	})
+// Retrieve posts for user
+app.get("/posts", (req, res) => {
+    req.session.content.finishedLoading = false;
+    let contact = req.query.contactUsername;
+    req.session.content.contact = contact;
+    // Connect to mongodb to check for posts
+    MongoClient.connect(url, (err, client) => {
+        if (err) throw err;
+        let db = client.db("tiktok-sms-grabber");
+        let currentUser = req.session.user.username;
+        db.collection("Posts", (err, collection) => {
+            collection.find({users: { $all: [{username: contact}, {username: currentUser}]}}, (err, result) => {
+                if (err) throw err;
+                req.session.content.finishedLoading = true;
+                // Send results
+                collection.find().toArray((err, docs) => {
+                    if (docs.length > 0) {
+                        for (let doc of docs) {
+                            let yourRating = 0;
+                            let theirRating = 0;
+                            if (doc.users[0].username === currentUser) {
+                                yourRating = doc.users[0].rating;
+                                theirRating = doc.users[1].rating;
+                            }
+                            else {
+                                yourRating = doc.users[1].rating;
+                                theirRating = doc.users[0].rating;
+                            }
+                            let obj = {
+                                id: doc._id,
+                                html: doc.html,
+                                yourRating: yourRating,
+                                theirRating: theirRating,
+                                comments: [],
+                                date: doc.date
+                            }
+                            req.session.content.posts.push(obj);
+                        }
+                        res.send({results: req.session.content})
+                    }
+                    else {
+                        res.send({results: null});
+                    }
+                })
+            })
+        })
+    })
 })
 
-let authenticate = async() => {
+// Scan messages for new posts
+app.post("/posts", async (req, res) => {
+    req.session.content.finishedLoading = false;
+    let contactNames = req.body.contact.split("-");
+    let contact = contactNames[0];
+    let contactUsername = contactNames[1];
+    // Launch puppeteer
+    let browser = await puppeteer.launch({headless: false, defaultViewport: {width: 1920, height: 1080}})
+    let page = await browser.newPage();
+    await page.goto("https://messages.google.com/web/authentication", {waitUntil: "networkidle2"});
+    
+    // Check for local data in session
+    if (Object.keys(req.session.localData).length === 0) {
+        await authenticate(page);
+        res.send({authenticate: true});
+        try {
+            // Wait for page to redirect to messages
+            let selectorFound = page.waitForSelector("mw-main-container");
+            selectorFound.then(async () => {
+                let dataObj = await getLocalData(page, req);
+                // Save data into session for future use
+                req.session.localData = dataObj;
+                req.session.save();
+                // Scrape message conversation for posts and then finish
+                await scrape(page, req, contact, contactUsername);
+                browser.close();
+                req.session.content.finishedLoading = true;
+            })
+        }
+        catch(e) { // If browser times out while waiting, close and finish
+            browser.close();
+            // TODO: convert finished loading to a status property to check specific status
+            req.session.content.finishedLoading = true;
+            return;
+        }
+    }
+    else {
+        res.send({authenticate: false});
+        await setData(page, req);
+        // Reload page after setting data and wait for list of contacts to load
+        await page.goto("https://messages.google.com/web/authentication", {waitUntil: "networkidle2"});
+        try {
+            let selectorFound = page.waitForSelector("mw-main-container");
+            selectorFound.then(async () => {
+                await scrape(page, req, contact, contactUsername);
+                browser.close();
+                req.session.content.finishedLoading = true;
+            })
+        }
+        catch(e) { // If browser times out while waiting, close, reset data and finish
+            browser.close();
+            req.session.content.finishedLoading = true;
+            req.session.localData = {};
+            return;
+        }
+    }
+})
+
+// Check post retrieval status
+app.get("/status", (req, res) => {
+    req.session.reload(() => {
+        res.send(req.session.content);
+    })
+})
+
+// Take screenshot of qr code to send to user for authentication
+let authenticate = async(page) => {
 	await page.screenshot({path: "./qr.png", clip: {x: 1075, y: 415, width: 250, height: 250}});
 	await page.evaluate(() => {
+        // Click on slider to stay logged in
 		document.querySelector(".mat-slide-toggle-bar").click();
 	})
 	return;
 }
 
-let getData = async (req) => {
-	await page.waitForSelector("mw-main-container");
-
+// Get cookiess, localStorage and sessionStorage to put into session
+let getLocalData = async (page) => {
 	let dataObj = await page.evaluate(async () => {
 		return await new Promise((res) => {
 			let obj = {
@@ -229,14 +286,14 @@ let getData = async (req) => {
 			};
 			res(obj);
 		})
-	})
+    })
 	dataObj.localStorage = JSON.parse(dataObj.localStorage);
-	dataObj.sessionStorage = JSON.parse(dataObj.sessionStorage);
-	req.session.localData = dataObj;
-	req.session.save();
+    dataObj.sessionStorage = JSON.parse(dataObj.sessionStorage);
+    return dataObj;
 }
 
-let setData = async (req) => {
+// Set cookies, local storage and session storage for website
+let setData = async (page, req) => {
 	await page.evaluate((local) => {
 		localStorage.setItem("dark_mode_enabled", local.dark_mode_enabled);
 		localStorage.setItem("pr_mw_exclusive_tab_key", local.pr_mw_exclusive_tab_key);
@@ -266,10 +323,13 @@ let setData = async (req) => {
 	}, req.session.localData.cookies)
 }
 
-let scrape = async (req, contact) => {
-	//await req.session.reload();
-	await page.waitForSelector("mws-conversation-list-item");
+// Scrape messages for new tiktok posts
+let scrape = async (page, req, contact, contactUsername) => {
+    // Wait for contacts to actually load on page
+    await page.waitForSelector("mws-conversation-list-item");
+    // TODO: handle timeout
 
+    // Click on specified contact
 	await page.evaluate((contact) => {
 		let conversations = document.querySelectorAll("mws-conversation-list-item a span");
 		for (let span of conversations) {
@@ -277,60 +337,134 @@ let scrape = async (req, contact) => {
 		}
 	}, contact)
 
-	req.session.content.posts[contact] = [];
-	req.session.save();
-	await page.waitForSelector("mws-message-wrapper");
+	// Wait for messages to load
+    await page.waitForSelector("mws-message-wrapper");
+    // TODO: handle timeout
 
+    // Search for tiktok links in conversation
 	let links = await page.evaluate(async () => {
 		return await new Promise(async (resolve, reject) => {
-			let scroll = document.querySelector("mws-bottom-anchored");
-			let scrollHeight = scroll.scrollHeight;
-			scroll.scrollTo(0, 0);
-			await new Promise((res, rej) => {
+			await new Promise((resolve) => {
+                // Get scrollable div containing messages
+                let scroll = document.querySelector("mws-bottom-anchored");
+			    let scrollHeight = scroll.scrollHeight;
+                let numOfScrolls = 0;
+                scroll.scrollTo(0, 0); // Go to top of messages to load more
 				let interval = setInterval(() => {
-					if (scroll.scrollHeight > scrollHeight) {
-						clearInterval(interval);
-						res();
+                    // If message list div gets bigger, increase scroll count
+					if (scroll.scrollHeight - scrollHeight > 20) {
+                        numOfScrolls += 1;
+                        if (numOfScrolls >= 5){ // When scroll count gets to 5, stop
+                            clearInterval(interval);
+                            clearTimeout(timeout);
+                            resolve();
+                        }
+                        else {
+                            scrollHeight = scroll.scrollHeight;
+                            scroll.scrollTo(0, 0); // Scroll to top again to load more
+                        }
 					}
-				}, 50)
-			})
+                }, 50)
+                // Stop after 15 seconds if scroll count still hasnt reached
+                let timeout = setTimeout(() => {
+                    clearInterval(interval);
+                    resolve();
+                }, 15000)
+            })
+            // Grab all links
 			let aTags = document.querySelectorAll(".text-msg-content a");
-			let aLinks = [];
+            let aLinks = [];
+            // For every link, check if link contains tiktok.com and add it to array
 			for (let a of aTags) {
 				if (a.href.toLowerCase().includes("tiktok.com")){
 					aLinks.push(a.href);
 				}
 			}
-			resolve(aLinks);
+			resolve(aLinks); // Return list of links
 		})
 	})
-	//console.log(links);	
-	// let posts = [];
+    let lastPost = null;
+    // Upload the last post that was obtained
+    let uploadPost = async () => {
+        return new Promise((resolve) => {
+            MongoClient.connect(url, (err, client) => {
+                if (err) throw err;
+                let db = client.db("tiktok-sms-grabber");
+                // Create post object based on last retrieved post
+                let post = {
+                    html: lastPost.html,
+                    users: [
+                        {
+                            username: req.session.user.username,
+                            rating: 0
+                        },
+                        {
+                            username: contactUsername,
+                            rating: 0
+                        }
+                    ],
+                    url: lastPost.targetURL,
+                    date: Date.now() // TODO: update to proper timezone based on client
+                }
+                db.collection("Posts").insertOne(post, (err) => {
+                    client.close();
+                    if (err) throw err;
+                    // Add new post to session
+                    post._id = post._id.toString();
+                    let sessionPost = {
+                        id: post._id,
+                        html: post.html,
+                        yourRating: 0,
+                        theirRating: 0,
+                        comments: [],
+                        url: post.targetURL,
+                        date: Date.now() // TODO: update to proper timezone based on client
+                    }
+                    req.session.content.posts.push(sessionPost);
+                    req.session.save(() => {
+                        resolve();
+                    });
+                })
+            })
+        })
+    } 
+
+	// For every link, go to the link
 	for (let link of links) {
-		await page.goto(link, {waitUntil: "networkidle2"});
-		let embedPost = await page.evaluate(async () => {
-			return await new Promise(async (resolve, reject) => {
-				let url = window.location.href;
-				let targetURL = url.split("?")[0];
-				let urlParts = targetURL.split("/video/");
-				let userURL = urlParts[0];
-				let user = userURL.split("tiktok.com/")[1];
-				let id = urlParts[1];
-				let embedHTML = `<blockquote class="tiktok-embed" cite="${targetURL}" 
-					data-video-id="${id}" style="max-width: 605px;min-width: 325px;" > <section> <a target="_blank" 
-					title="${user}" href="${userURL}"></a> </section> </blockquote>`;
-				resolve({html: embedHTML, url: targetURL});
-			})
-		})
-		req.session.reload(() => {
-			req.session.content.posts[contact].push(embedPost);
-			req.session.save();
-		})
-	}	
-	browser.close();
-	return;
+        let pageLoad = page.goto(link, {waitUntil: "networkidle2"});
+        if (lastPost) {
+            // Add last post to database while page is loading
+            uploadPost();
+        }
+        await new Promise((resolve) => {
+            pageLoad.then(() => {
+                resolve();
+            })
+        });
+        // Get the full url for the web page and split it into parts
+        let embedPost = await page.evaluate(async () => {
+            return await new Promise(async (resolve, reject) => {
+                let url = window.location.href;
+                let targetURL = url.split("?")[0];
+                let urlParts = targetURL.split("/video/");
+                let userURL = urlParts[0];
+                let user = userURL.split("tiktok.com/")[1];
+                let id = urlParts[1];
+                // Using the split up url parts, create the embeded html
+                let embedHTML = `<blockquote class="tiktok-embed" cite="${targetURL}" 
+                    data-video-id="${id}" style="max-width: 605px;min-width: 325px;" > 
+                    <section> <a target="_blank" title="${user}" href="${userURL}"></a> 
+                    </section> </blockquote>`;
+                resolve({html: embedHTML, url: targetURL}); // Return embeded html
+            })
+        })
+        lastPost = embedPost;
+    }
+    
+    await uploadPost(); // Upload the final obtained post (after final loop)
+	return true;
 }
 
-app.listen(3000, () => {
-	console.log("server started");
+app.listen(process.env.PORT || 3000, process.env.IP, () => {
+    console.log("Server has started");
 })

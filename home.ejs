@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title></title>
+        <style>
+            body {
+                background-color: #202020;
+                color: #d0d0d0;
+            }
+        </style>
+    </head>
+    <body>
+        <p class="error"></p>
+        <input type="text" placeholder="Contact to search" id="contact">
+        is 
+        <input type="text" placeholder="Contact username (optional)" id="username">
+        <button id="add-contact-btn">Add contact</button>
+        <br>
+        <select id="contacts-list">
+            <option value="" selected="selected">Select Contact</option>
+            <% for (let contact of contacts) {%>
+                <option value="<%= contact.contactName %>-<%= contact.username %>"><%= contact.contactName %> as <%= contact.username %></option>
+            <% } %>
+        </select>
+        <button id="search-posts-btn" style="visibility: hidden;">Search Conversation</button>
+        <div class="content">
+            
+        </div>
+        <script>
+            let error = document.querySelector(".error");
+            let contact = document.querySelector("#contact");
+            let username = document.querySelector("#username");
+            let addContactBtn = document.querySelector("#add-contact-btn");
+            let contactsList = document.querySelector("#contacts-list");
+            let searchPostsBtn = document.querySelector("#search-posts-btn");
+            let content = document.querySelector(".content");
+            let postIndex = 0;
+
+            addContactBtn.addEventListener("click", async () => {
+                error.textContent = "";
+                if (contact.value === "") {
+                    error.textContent = "Contact cannot be blank";
+                    return;
+                }
+                let response = await fetch("/contacts", {
+                    method: "POST",
+                    headers: {
+                        'Content-type': 'application/json'
+                    },
+                    body: JSON.stringify({contact: contact.value, username: username.value})
+                })
+                let data = await response.json();
+                let option = document.createElement("option");
+                option.innerHTML = 
+                    `<option value=${data.username}>${data.contactName} as ${data.username}</option>`;
+                contactsList.appendChild(option);
+            })
+
+            contactsList.addEventListener("change", async () => {
+                if (contactsList.value === "") return;
+                let response = await fetch("/posts?username=" + contactsList.value);
+                let data = await response.json();
+                postIndex = 0;
+                if (data.results) {
+                    // For every post, create the necessary html
+                    for (let i = postIndex; i < data.results.posts.length; i++) {
+                        let div = document.createElement("div");
+                        div.innerHTML = data.results.posts[i].html;
+                        let script = document.createElement("script");
+                        let src = document.createAttribute("src");
+                        src.value = "https://www.tiktok.com/embed.js";
+                        script.setAttributeNode(src);
+                        div.appendChild(script);
+                        document.querySelector("body").appendChild(div);
+                    }
+                    postIndex = data.results.posts.length;
+                }
+                searchPostsBtn.style.visibility = "visible";
+            })
+
+            searchPostsBtn.addEventListener("click", async () => {
+                let response = await fetch("/posts", {
+                    method: "POST",
+                    headers: {
+                        "Content-type": "application/json"
+                    },
+                    body: JSON.stringify({contact: contactsList.value})
+                })
+                let data = await response.json();
+                if (data.authenticate) {
+                    content.innerHTML = "<img src='/qr.png'>";
+                }
+                if (window.interval) clearInterval(window.interval);
+                window.interval = setInterval(() => {
+                    checkStatus();
+                }, 5000)
+            })
+
+            async function checkStatus() {
+                let response = await fetch("/status");
+                let data = await response.json();
+                // For every post, create the necessary html
+                for (let i = postIndex; i < data.posts.length; i++) {
+                    let div = document.createElement("div");
+                    div.innerHTML = data.posts[i].html;
+                    let script = document.createElement("script");
+                    let src = document.createAttribute("src");
+                    src.value = "https://www.tiktok.com/embed.js";
+                    script.setAttributeNode(src);
+                    div.appendChild(script);
+                    document.querySelector("body").appendChild(div);
+                }
+                // Keep track of last index of posts to check
+                postIndex = data.posts.length;
+                if (data.finishedLoading) clearInterval(window.interval);
+            }
+        </script>
+    </body>
+</html>

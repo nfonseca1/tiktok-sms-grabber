@@ -2,12 +2,16 @@
   "name": "messages",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "app.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node app.js"
   },
-  "author": "",
+  "author": "Nathan Fonseca",
   "license": "ISC",
+  "engines": {
+    "node": "14.8"
+  },
   "dependencies": {
     "bcrypt": "^5.0.0",
     "dotenv": "^8.2.0",
