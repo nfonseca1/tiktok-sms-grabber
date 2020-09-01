@@ -50,6 +50,13 @@ app.post("/login", (req, res) => {
                     contacts: result.contacts
                 }
                 req.session.save();
+                // Set up session data properties
+                req.session.localData = {};
+                req.session.content = {
+                    finishedLoading: true,
+                    contact: null,
+                    posts: []
+                }
 				res.redirect("/home"); // Go to home route
             }
             else {
@@ -114,13 +121,6 @@ app.get("/home", (req, res) => {
         res.redirect("/");
         return;
     }
-    // Set up session data properties
-    req.session.localData = {};
-    req.session.content = {
-        finishedLoading: true,
-        contact: null,
-        posts: []
-    }
     res.render("home.ejs", {contacts: req.session.user.contacts}); // Render home page
 })
 
@@ -165,6 +165,7 @@ app.get("/posts", (req, res) => {
             collection.find({users: { $all: [{username: contact}, {username: currentUser}]}}, (err, result) => {
                 if (err) throw err;
                 req.session.content.finishedLoading = true;
+                req.session.content.posts = [];
                 // Send results
                 collection.find().toArray((err, docs) => {
                     if (docs.length > 0) {
@@ -185,6 +186,7 @@ app.get("/posts", (req, res) => {
                                 yourRating: yourRating,
                                 theirRating: theirRating,
                                 comments: [],
+                                link: doc.link,
                                 date: doc.date
                             }
                             req.session.content.posts.push(obj);
@@ -207,7 +209,7 @@ app.post("/posts", async (req, res) => {
     let contact = contactNames[0];
     let contactUsername = contactNames[1];
     // Launch puppeteer
-    let browser = await puppeteer.launch({headless: false, defaultViewport: {width: 1920, height: 1080}})
+    let browser = await puppeteer.launch({headless: true, defaultViewport: {width: 1920, height: 1080}})
     let page = await browser.newPage();
     await page.goto("https://messages.google.com/web/authentication", {waitUntil: "networkidle2"});
     
@@ -215,26 +217,24 @@ app.post("/posts", async (req, res) => {
     if (Object.keys(req.session.localData).length === 0) {
         await authenticate(page);
         res.send({authenticate: true});
-        try {
-            // Wait for page to redirect to messages
-            let selectorFound = page.waitForSelector("mw-main-container");
-            selectorFound.then(async () => {
-                let dataObj = await getLocalData(page, req);
-                // Save data into session for future use
-                req.session.localData = dataObj;
-                req.session.save();
-                // Scrape message conversation for posts and then finish
-                await scrape(page, req, contact, contactUsername);
-                browser.close();
-                req.session.content.finishedLoading = true;
-            })
-        }
-        catch(e) { // If browser times out while waiting, close and finish
+        // Wait for page to redirect to messages
+        let selectorFound = page.waitForSelector("mw-main-container");
+        selectorFound.then(async () => {
+            let dataObj = await getLocalData(page, req);
+            // Save data into session for future use
+            req.session.localData = dataObj;
+            req.session.save();
+            // Scrape message conversation for posts and then finish
+            await scrape(page, req, contact, contactUsername);
+            browser.close();
+            req.session.content.finishedLoading = true;
+        })
+        .catch(() => { // If browser times out while waiting, close and finish
             browser.close();
             // TODO: convert finished loading to a status property to check specific status
             req.session.content.finishedLoading = true;
             return;
-        }
+        })
     }
     else {
         res.send({authenticate: false});
@@ -342,7 +342,7 @@ let scrape = async (page, req, contact, contactUsername) => {
     // TODO: handle timeout
 
     // Search for tiktok links in conversation
-	let links = await page.evaluate(async () => {
+	let links = await page.evaluate(async (posts) => {
 		return await new Promise(async (resolve, reject) => {
 			await new Promise((resolve) => {
                 // Get scrollable div containing messages
@@ -354,7 +354,7 @@ let scrape = async (page, req, contact, contactUsername) => {
                     // If message list div gets bigger, increase scroll count
 					if (scroll.scrollHeight - scrollHeight > 20) {
                         numOfScrolls += 1;
-                        if (numOfScrolls >= 5){ // When scroll count gets to 5, stop
+                        if (numOfScrolls >= 6){ // When scroll count gets to 6, stop
                             clearInterval(interval);
                             clearTimeout(timeout);
                             resolve();
@@ -375,14 +375,19 @@ let scrape = async (page, req, contact, contactUsername) => {
 			let aTags = document.querySelectorAll(".text-msg-content a");
             let aLinks = [];
             // For every link, check if link contains tiktok.com and add it to array
-			for (let a of aTags) {
-				if (a.href.toLowerCase().includes("tiktok.com")){
-					aLinks.push(a.href);
-				}
-			}
+			for (let i = 0; i < aTags.length; i++) {
+                if (aTags[i].href.toLowerCase().includes("tiktok.com") == false) continue;
+                // If post link is not already in our collection of posts
+                let push = true;
+                for (let post of posts) {
+                    if (post.link === aTags[i].href) push = false;
+                }
+                if (push) aLinks.push(aTags[i].href);
+            }
 			resolve(aLinks); // Return list of links
 		})
-	})
+    }, req.session.content.posts)
+    
     let lastPost = null;
     // Upload the last post that was obtained
     let uploadPost = async () => {
@@ -403,7 +408,7 @@ let scrape = async (page, req, contact, contactUsername) => {
                             rating: 0
                         }
                     ],
-                    url: lastPost.targetURL,
+                    link: lastPost.link,
                     date: Date.now() // TODO: update to proper timezone based on client
                 }
                 db.collection("Posts").insertOne(post, (err) => {
@@ -417,7 +422,7 @@ let scrape = async (page, req, contact, contactUsername) => {
                         yourRating: 0,
                         theirRating: 0,
                         comments: [],
-                        url: post.targetURL,
+                        link: post.link,
                         date: Date.now() // TODO: update to proper timezone based on client
                     }
                     req.session.content.posts.push(sessionPost);
@@ -428,6 +433,7 @@ let scrape = async (page, req, contact, contactUsername) => {
             })
         })
     } 
+    links = new Set(links);
 
 	// For every link, go to the link
 	for (let link of links) {
@@ -442,7 +448,7 @@ let scrape = async (page, req, contact, contactUsername) => {
             })
         });
         // Get the full url for the web page and split it into parts
-        let embedPost = await page.evaluate(async () => {
+        let embedPost = await page.evaluate(async (link) => {
             return await new Promise(async (resolve, reject) => {
                 let url = window.location.href;
                 let targetURL = url.split("?")[0];
@@ -455,9 +461,9 @@ let scrape = async (page, req, contact, contactUsername) => {
                     data-video-id="${id}" style="max-width: 605px;min-width: 325px;" > 
                     <section> <a target="_blank" title="${user}" href="${userURL}"></a> 
                     </section> </blockquote>`;
-                resolve({html: embedHTML, url: targetURL}); // Return embeded html
+                resolve({html: embedHTML, link: link}); // Return embeded html
             })
-        })
+        }, link)
         lastPost = embedPost;
     }
     
