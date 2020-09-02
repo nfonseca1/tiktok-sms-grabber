@@ -3,9 +3,78 @@
     <head>
         <title></title>
         <style>
-            body {
-                background-color: #202020;
-                color: #d0d0d0;
+            .post-content {
+                display: flex;
+                justify-content: center;
+                width: 100%;
+            }
+            .post {
+                display: inline-block;
+                width: 40vw;
+                height: 783px;
+            }
+            blockquote {
+                height: 705px;
+            }
+            .social-box {
+                display: inline-block;
+                border: 1px solid gray;
+                width: 25vw;
+                height: 700px;
+                margin: 20px 0 0 3%;
+            }
+            .ratings {
+                display: flex;
+                width: 100%;
+                height: 10%;
+                border-bottom: 1px solid gray;
+            }
+            .message-list {
+                display: block;
+                width: 100%;
+                height: 86%;
+                overflow: scroll;
+                scrollbar-width: none; /* Firefox */
+                -ms-overflow-style: none;  /* IE 10+ */
+            }
+            ::-webkit-scrollbar {
+                width: 0px;
+                background: transparent;
+            }
+            .message {
+                display: block;
+            }
+            .your-message {
+                padding: 15px 0px 5px 25%;
+            }
+            .their-message {
+                padding: 15px 25% 5px 0;
+            }
+            .message-text {
+                border: 1px solid gray;
+            }
+            .their-message .message-text {
+                border-radius: 0 5px 5px 0;
+                background-color: #cacaca;
+            }
+            .your-message .message-text {
+                border-radius: 5px 0 0 5px;
+                background-color: #81bcff;
+            }
+            .message-input {
+                display: flex;
+                width: 100%;
+                height: 4%;
+                border-top: 1px solid gray;
+            }
+            .message-input input {
+                height: 80%;
+                width: 75%;
+                padding: 0 0 0 2%;
+            }
+            .message-input button {
+                height: 95%;
+                width: 24%;
             }
         </style>
     </head>
@@ -35,6 +104,7 @@
             let searchPostsBtn = document.querySelector("#search-posts-btn");
             let content = document.querySelector(".content");
             let postIndex = 0;
+            let myUser = "";
 
             addContactBtn.addEventListener("click", async () => {
                 error.textContent = "";
@@ -61,17 +131,11 @@
                 let response = await fetch("/posts?username=" + contactsList.value);
                 let data = await response.json();
                 postIndex = 0;
+                myUser = data.user.username;
                 if (data.results) {
                     // For every post, create the necessary html
                     for (let i = postIndex; i < data.results.posts.length; i++) {
-                        let div = document.createElement("div");
-                        div.innerHTML = data.results.posts[i].html;
-                        let script = document.createElement("script");
-                        let src = document.createAttribute("src");
-                        src.value = "https://www.tiktok.com/embed.js";
-                        script.setAttributeNode(src);
-                        div.appendChild(script);
-                        document.querySelector("body").appendChild(div);
+                        createPost(data.results.posts, i);
                     }
                     postIndex = data.results.posts.length;
                 }
@@ -101,18 +165,94 @@
                 let data = await response.json();
                 // For every post, create the necessary html
                 for (let i = postIndex; i < data.posts.length; i++) {
-                    let div = document.createElement("div");
-                    div.innerHTML = data.posts[i].html;
-                    let script = document.createElement("script");
-                    let src = document.createAttribute("src");
-                    src.value = "https://www.tiktok.com/embed.js";
-                    script.setAttributeNode(src);
-                    div.appendChild(script);
-                    document.querySelector("body").appendChild(div);
+                    createPost(data.posts, i);
                 }
                 // Keep track of last index of posts to check
                 postIndex = data.posts.length;
                 if (data.finishedLoading) clearInterval(window.interval);
+            }
+
+            async function createPost(posts, i) {
+                let div = document.createElement("div");
+                div.classList.add("post");
+                div.innerHTML = posts[i].html;
+                let script = document.createElement("script");
+                let src = document.createAttribute("src");
+                src.value = "https://www.tiktok.com/embed.js";
+                script.setAttributeNode(src);
+                div.appendChild(script);
+                // Social box
+                let comments = document.createElement("div");
+                comments.classList.add("social-box");
+                // Ratings sections
+                let ratings = document.createElement("div");
+                ratings.classList.add("ratings");
+                comments.appendChild(ratings);
+                // Message list
+                let messageList = document.createElement("div");
+                messageList.classList.add("message-list");
+                comments.appendChild(messageList);
+                // New message input
+                let messageInput = document.createElement("div");
+                messageInput.classList.add("message-input");
+                comments.appendChild(messageInput);
+                let input = document.createElement("input");
+                input.setAttribute("type", "text");
+                input.setAttribute("placeholder", "New comment");
+                input.classList.add("msg-input");
+                messageInput.appendChild(input);
+                let button = document.createElement("button");
+
+                // Add comments to comment list
+                for (let comment of posts[i].comments){
+                    let newComment = document.createElement("div");
+                    let authorClass = comment.author === myUser ? "your-message" : "their-message";
+                    messageList.appendChild(newComment);
+                    newComment.outerHTML = `
+                    <div class="message ${authorClass}">
+                        <div class="message-text">
+                            ${comment.text}
+                        </div>
+                    </div>
+                    `;
+                }
+                
+                // Add new comment
+                button.addEventListener("click", function() {
+                    addComment(posts[i], input, messageList);
+                })
+
+                button.classList.add("msg-send-btn");
+                button.textContent = "Send";
+                messageInput.appendChild(button);
+
+                let contentPost = document.createElement("div");
+                contentPost.classList.add("post-content");
+                contentPost.appendChild(div);
+                contentPost.appendChild(comments);
+                content.appendChild(contentPost);
+            }
+
+            async function addComment(data, input, messageList) {
+                let response = await fetch("/comments", {
+                    method: "post",
+                    headers: {
+                        "Content-type": "application/json"
+                    },
+                    body: JSON.stringify({postId: data.id, commentText: input.value})
+                })
+                let commentResult = await response.json();
+                if (commentResult.success) {
+                    let newComment = document.createElement("div");
+                    messageList.appendChild(newComment);
+                    newComment.outerHTML = `
+                    <div class="message your-message">
+                        <div class="message-text">
+                            ${input.value}
+                        </div>
+                    </div>
+                    `;
+                }
             }
         </script>
     </body>

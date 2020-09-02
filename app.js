@@ -167,7 +167,7 @@ app.get("/posts", (req, res) => {
                 req.session.content.finishedLoading = true;
                 req.session.content.posts = [];
                 // Send results
-                collection.find().toArray((err, docs) => {
+                collection.find().toArray(async (err, docs) => {
                     if (docs.length > 0) {
                         for (let doc of docs) {
                             let yourRating = 0;
@@ -180,18 +180,23 @@ app.get("/posts", (req, res) => {
                                 yourRating = doc.users[1].rating;
                                 theirRating = doc.users[0].rating;
                             }
+                            let comments = await new Promise((resolve) => {
+                                db.collection("Comments").find({postId: doc._id.toString()}).toArray((err, commentResults) => {
+                                    resolve(commentResults);
+                                })
+                            })
                             let obj = {
-                                id: doc._id,
+                                id: doc._id.toString(),
                                 html: doc.html,
                                 yourRating: yourRating,
                                 theirRating: theirRating,
-                                comments: [],
+                                comments: comments || [],
                                 link: doc.link,
                                 date: doc.date
                             }
                             req.session.content.posts.push(obj);
                         }
-                        res.send({results: req.session.content})
+                        res.send({results: req.session.content, user: req.session.user})
                     }
                     else {
                         res.send({results: null});
@@ -262,6 +267,34 @@ app.post("/posts", async (req, res) => {
 app.get("/status", (req, res) => {
     req.session.reload(() => {
         res.send(req.session.content);
+    })
+})
+
+// Add new post comment
+app.post("/comments", (req, res) => {
+    let postId = req.body.postId;
+    let commentText = req.body.commentText;
+    MongoClient.connect(url, (err, client) => {
+        if (err) throw err;
+        let db = client.db("tiktok-sms-grabber");
+        let obj = {
+            postId: postId,
+            text: commentText,
+            author: req.session.user.username,
+            date: Date.now()
+        }
+        db.collection("Comments").insertOne(obj, (err) => {
+            if (err) throw err;
+            client.close();
+            // TODO: change content post array to an object with the id as key
+            for (let post of req.session.content.posts) {
+                if (post.id === postId) {
+                    post.comments.push(obj);
+                    res.send({success: true});
+                    return;
+                }
+            }
+        })
     })
 })
 
